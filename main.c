@@ -23,6 +23,7 @@ threadmain(int argc, char *argv[])
 	int fd;
 
 	SIPfmtinstall();
+	fmtinstall('H', encodefmt);
 	ARGBEGIN{
 	default: usage();
 	case 'd':

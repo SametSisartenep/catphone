@@ -24,26 +24,6 @@ static char *methodstrtab[] = {
  [REFER]	"REFER",
 };
 
-static char registerhdr[] = "REGISTER sip:10.0.0.104 SIP/2.0\r\n"
-	"Via: SIP/2.0/UDP 10.0.1.9:54022;branch=z9hG4bKdf800c31b9a88ffb;rport\r\n"
-	"Contact: <sip:sam-0x82a66a010@10.0.1.9:54022>;expires=3849\r\n"
-	"Max-Forwards: 70\r\n"
-	"Authorization: Digest username=\"sam\", realm=\"asterisk\", nonce=\"0d39ab10\", uri=\"sip:10.0.0.104\", response=\"a12e05b52604b5226763ce577d5c240b\", algorithm=MD5\r\n"
-	"To: <sip:sam@10.0.0.104>\r\n"
-	"From: <sip:sam@10.0.0.104>;tag=4a5a693256d38cbc\r\n"
-	"Call-ID: 2cee372fc4be4e45\r\n"
-	"CSeq: 16022 REGISTER\r\n"
-	"User-Agent: catphone (plan9front)\r\n"
-	"Allow: INVITE,ACK,BYE,CANCEL,OPTIONS,NOTIFY,SUBSCRIBE,INFO,MESSAGE,UPDATE,REFER\r\n"
-	"Content-Length: 0\r\n"
-	"\r\n";
-
-static void
-strtolower(char *s)
-{
-	while(*s)
-		*s++ = tolower(*s);
-}
 
 static char *
 getmethodstr(SipMethod m)
@@ -60,32 +40,16 @@ md5authfn(char *user, char *pass, char *uri, Sipmsg* m)
 	char buf[4096];
 
 	snprint(buf, sizeof buf, "%s:%s:%s", user, m->auth.realm, pass);
-	if(debug)
-		fprint(2, "h1: %s\n", buf);
 	md5((uchar*)buf, strlen(buf), h1d, nil);
 	snprint(buf, sizeof buf, "%s:%s", getmethodstr(m->method), uri);
-	if(debug)
-		fprint(2, "h2: %s\n", buf);
 	md5((uchar*)buf, strlen(buf), h2d, nil);
-	
-	enc16(h1ds, sizeof h1ds, h1d, sizeof h1d);
-	enc16(h2ds, sizeof h2ds, h2d, sizeof h2d);
-	h1ds[nelem(h1ds)-1] = 0;
-	h2ds[nelem(h2ds)-1] = 0;
-	strtolower(h1ds);
-	strtolower(h2ds);
-	if(debug)
-		fprint(2, "h1ds: %s\nh2ds: %s\n", h1ds, h2ds);
+
+	snprint(h1ds, sizeof h1ds, "%.*lH", sizeof h1d, h1d);
+	snprint(h2ds, sizeof h2ds, "%.*lH", sizeof h2d, h2d);
 
 	snprint(buf, sizeof buf, "%s:%s:%s", h1ds, m->auth.nonce, h2ds);
-	if(debug)
-		fprint(2, "r: %s\n", buf);
 	md5((uchar*)buf, strlen(buf), rd, nil);
-	enc16(rds, sizeof rds, rd, sizeof rd);
-	rds[nelem(rds)-1] = 0;
-	strtolower(rds);
-	if(debug)
-		fprint(2, "rds: %s\n", rds);
+	snprint(rds, sizeof rds, "%.*lH", sizeof rd, rd);
 
 	return rds;
 }
