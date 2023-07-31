@@ -13,6 +13,10 @@ typedef enum {
 	REFER
 } SipMethod;
 
+typedef enum {
+	AMD5,
+} SipAuthAlgo;
+
 /* rfc3261 § 21 - Response Codes */
 typedef enum {
 	/* 1xx Provisional */
@@ -99,8 +103,25 @@ struct Hdrtab
 struct Sipmsg
 {
 	Hdrtab;
-	char *version;
+
+	struct {
+		char *algo;
+		char *realm;
+		char *nonce;
+		char *response;
+	} auth;
+
+	/* request */
 	SipMethod method;
+	char *uri;
+
+	/* response */
+	int code;
+	char *reason;
+
+	char *version;
+	ulong len;
+	char body[];
 };
 
 /* SIP UAC (see rfc3261 § 8.1, 12.1.2) */
@@ -113,5 +134,7 @@ struct Sip
 
 	int (*reg)(Sip*, char*, char*);
 };
+
+#pragma varargck type "S" Sipmsg*
 
 extern int debug;

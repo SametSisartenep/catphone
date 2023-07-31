@@ -1,0 +1,33 @@
+.TH MUSW 1
+.SH NAME
+catphone \- VoIP softphone worth a cat
+.SH SYNOPSIS
+.B catphone
+[
+.B -d
+]
+.I dialstring
+.I user
+.I password
+.SH DESCRIPTION
+.I Catphone
+is a VoIP softphone operated by a cat.
+.SH EXAMPLE
+.IP
+.EX
+% catphone udp!pbx.only9fans.com!sip bob secretodebob
+.EE
+.SH SOURCE
+.B /sys/src/cmd/catphone
+.SH SEE ALSO
+.IR catclock (1)
+.br
+/lib/rfc/rfc3261
+.br
+/lib/rfc/rfc8760
+.br
+Gonzalo Camarillo, “SIP Demystified”, McGraw-Hill, 2001.
+.SH BUGS
+.SH HISTORY
+.I Catphone
+first appeared in 9front (August, 2023).

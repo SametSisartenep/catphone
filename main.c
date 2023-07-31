@@ -22,6 +22,7 @@ threadmain(int argc, char *argv[])
 	char *addr;
 	int fd;
 
+	SIPfmtinstall();
 	ARGBEGIN{
 	default: usage();
 	case 'd':

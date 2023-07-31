@@ -1,11 +1,14 @@
 #include <u.h>
 #include <libc.h>
 #include <bio.h>
+#include <mp.h>
+#include <libsec.h>
 #include <draw.h>
 #include "dat.h"
 #include "fns.h"
 
 static char sipversion[] = "SIP/2.0";
+static char useragent[] = "catphone (plan9front)";
 static char *methodstrtab[] = {
  [REGISTER]	"REGISTER",
  [INVITE]	"INVITE",
@@ -21,18 +24,6 @@ static char *methodstrtab[] = {
  [REFER]	"REFER",
 };
 
-static char registerhdr0[] = "REGISTER sip:%s %s\r\n"
-	"Via: %s/UDP %s:%s;branch=z9hG4bK703d971c0c737b8e;rport\r\n"
-	"Contact: <sip:%s-0x82a66a010@%s:%s>;expires=3849\r\n"
-	"Max-Forwards: 70\r\n"
-	"To: <sip:%s@%s>\r\n"
-	"From: <sip:%s@%s>;tag=4a5a693256d38cbc\r\n"
-	"Call-ID: 2cee372fc4be4e45\r\n"
-	"CSeq: 16021 REGISTER\r\n"
-	"User-Agent: catphone (plan9front)\r\n"
-	"Allow: INVITE,ACK,BYE,CANCEL,OPTIONS,NOTIFY,SUBSCRIBE,INFO,MESSAGE,UPDATE,REFER\r\n"
-	"Content-Length: 0\r\n"
-	"\r\n";
 static char registerhdr[] = "REGISTER sip:10.0.0.104 SIP/2.0\r\n"
 	"Via: SIP/2.0/UDP 10.0.1.9:54022;branch=z9hG4bKdf800c31b9a88ffb;rport\r\n"
 	"Contact: <sip:sam-0x82a66a010@10.0.1.9:54022>;expires=3849\r\n"
@@ -47,11 +38,64 @@ static char registerhdr[] = "REGISTER sip:10.0.0.104 SIP/2.0\r\n"
 	"Content-Length: 0\r\n"
 	"\r\n";
 
+static void
+strtolower(char *s)
+{
+	while(*s)
+		*s++ = tolower(*s);
+}
+
 static char *
 getmethodstr(SipMethod m)
 {
 	return methodstrtab[m];
 }
+
+static char *
+md5authfn(char *user, char *pass, char *uri, Sipmsg* m)
+{
+	uchar h1d[MD5dlen], h2d[MD5dlen], rd[MD5dlen];
+	char h1ds[2*MD5dlen+1], h2ds[2*MD5dlen+1];
+	static char rds[2*MD5dlen+1];
+	char buf[4096];
+
+	snprint(buf, sizeof buf, "%s:%s:%s", user, m->auth.realm, pass);
+	if(debug)
+		fprint(2, "h1: %s\n", buf);
+	md5((uchar*)buf, strlen(buf), h1d, nil);
+	snprint(buf, sizeof buf, "%s:%s", getmethodstr(m->method), uri);
+	if(debug)
+		fprint(2, "h2: %s\n", buf);
+	md5((uchar*)buf, strlen(buf), h2d, nil);
+	
+	enc16(h1ds, sizeof h1ds, h1d, sizeof h1d);
+	enc16(h2ds, sizeof h2ds, h2d, sizeof h2d);
+	h1ds[nelem(h1ds)-1] = 0;
+	h2ds[nelem(h2ds)-1] = 0;
+	strtolower(h1ds);
+	strtolower(h2ds);
+	if(debug)
+		fprint(2, "h1ds: %s\nh2ds: %s\n", h1ds, h2ds);
+
+	snprint(buf, sizeof buf, "%s:%s:%s", h1ds, m->auth.nonce, h2ds);
+	if(debug)
+		fprint(2, "r: %s\n", buf);
+	md5((uchar*)buf, strlen(buf), rd, nil);
+	enc16(rds, sizeof rds, rd, sizeof rd);
+	rds[nelem(rds)-1] = 0;
+	strtolower(rds);
+	if(debug)
+		fprint(2, "rds: %s\n", rds);
+
+	return rds;
+}
+
+static struct {
+	char *name;
+	char *(*fn)(char*, char*, char*, Sipmsg*);
+} algos[] = {
+ [AMD5]	{ .name = "MD5", .fn = md5authfn },
+};
 
 static uint
 hash(char *s)
@@ -62,6 +106,214 @@ hash(char *s)
 	while(*s != 0)
 		h = (h^(uchar)*s++) * 0x1000193;
 	return h % 13;
+}
+
+/* rfc3261 § 10 - Registrations */
+static int
+sip_register(Sip *s, char *user, char *pass)
+{
+	Sipmsg *req, *res;
+	Hdr *h;
+	Biobuf *bin, *bout;
+	char *line, *p, *kv[8], *kv2[2], buf[1024];
+	int n;
+
+	if((bin = Bfdopen(s->fd, OREAD)) == nil)
+		sysfatal("Bfdopen: %r");
+	if((bout = Bfdopen(s->fd, OWRITE)) == nil)
+		sysfatal("Bfdopen: %r");
+
+	/* present yourself */
+	req = newsipmsg();
+	req->method = REGISTER;
+	req->uri = smprint("sip:%s", s->nci->rsys);
+	req->version = sipversion;
+	snprint(buf, sizeof buf, "%s/UDP %s:%s;branch=z9hG4bK703d971c0c737b8e;rport",
+		sipversion, s->nci->lsys, s->nci->lserv);
+	addheader(req, "Via", buf);
+	snprint(buf, sizeof buf, "<sip:%s-0x82a66a010@%s:%s>;expires=3849",
+		user, s->nci->lsys, s->nci->lserv);
+	addheader(req, "Contact", buf);
+	addheader(req, "Max-Forwards", "70");
+	snprint(buf, sizeof buf, "<sip:%s@%s>",
+		user, s->nci->rsys);
+	addheader(req, "To", buf);
+	snprint(buf, sizeof buf, "<sip:%s@%s>;tag=4a5a693256d38cbc",
+		user, s->nci->rsys);
+	addheader(req, "From", buf);
+	addheader(req, "Call-ID", "2cee372fc4be4e45");
+	addheader(req, "CSeq", "16021 REGISTER");
+	addheader(req, "User-Agent", useragent);
+	addheader(req, "Allow", "INVITE,ACK,BYE,CANCEL,OPTIONS,NOTIFY,SUBSCRIBE,INFO,MESSAGE,UPDATE,REFER");
+	snprint(buf, sizeof buf, "%lud", req->len);
+	addheader(req, "Content-Length", buf);
+
+	Bprint(bout, "%S", req);
+	Bflush(bout);
+
+	if(debug)
+		fprint(2, "sent:\n%S\n", req);
+
+	delsipmsg(req);
+
+	/* wait for the challenge */
+	res = newsipmsg();
+	while((line = Brdline(bin, '\n')) != nil){
+		if(strncmp(line, "\r\n", 2) == 0)
+			break;
+
+		p = strchr(line, '\r');
+		*p++ = 0, *p = 0;
+
+		if(strstr(line, ":") == nil && req->code == 0){
+			if(gettokens(line, kv, 3, " ") == 3){
+				res->version = strdup(kv[0]);
+				res->code = strtoul(kv[1], nil, 10);
+				res->reason = strdup(kv[2]);
+			}
+			continue;
+		}
+
+		if(gettokens(line, kv, 2, ": ") == 2)
+			addheader(res, kv[0], kv[1]);
+	}
+
+	if(debug)
+		fprint(2, "rcvd:\n%S\n", res);
+
+	/* respond to the challenge */
+	if((h = getheader(res, "WWW-Authenticate")) == nil)
+		return -1;
+
+	if((n = gettokens(h->value, kv, nelem(kv), ", ")) == 0)
+		return -1;
+
+	while(n-- > 0){
+		if(gettokens(kv[n], kv2, 2, "=\"") != 2)
+			continue;
+
+		/* XXX: this hack should be replaced by a better method */
+		p = strchr(kv2[1], '"');
+		if(p != nil)
+			*p = 0;
+
+		if(strcmp(kv2[0], "algorithm") == 0)
+			req->auth.algo = strdup(kv2[1]);
+		else if(strcmp(kv2[0], "realm") == 0)
+			req->auth.realm = strdup(kv2[1]);
+		else if(strcmp(kv2[0], "nonce") == 0)
+			req->auth.nonce = strdup(kv2[1]);
+	}
+	if(strcmp(res->auth.algo, "MD5") == 0){
+		snprint(buf, sizeof buf, "sip:%s", s->nci->rsys);
+		res->auth.response = algos[AMD5].fn(user, pass, buf, res);
+		if(res->auth.response == nil)
+			return -1;
+	}else
+		return -1;
+
+	req = newsipmsg();
+	req->method = REGISTER;
+	req->uri = strdup(buf);
+	req->version = sipversion;
+	snprint(buf, sizeof buf, "%s/UDP %s:%s;branch=z9hG4bK703d971c0c737b8e;rport",
+		sipversion, s->nci->lsys, s->nci->lserv);
+	addheader(req, "Via", buf);
+	snprint(buf, sizeof buf, "<sip:%s-0x82a66a010@%s:%s>;expires=3849",
+		user, s->nci->lsys, s->nci->lserv);
+	addheader(req, "Contact", buf);
+	snprint(buf, sizeof buf, "Digest username=\"%s\", realm=\"%s\", nonce=\"%s\", uri=\"%s\", response=\"%s\", algorithm=\"%s\"",
+		user, res->auth.realm, res->auth.nonce, req->uri, res->auth.response, res->auth.algo);
+	addheader(req, "Authorization", buf);
+	addheader(req, "Max-Forwards", "70");
+	snprint(buf, sizeof buf, "<sip:%s@%s>",
+		user, s->nci->rsys);
+	addheader(req, "To", buf);
+	snprint(buf, sizeof buf, "<sip:%s@%s>;tag=4a5a693256d38cbc",
+		user, s->nci->rsys);
+	addheader(req, "From", buf);
+	addheader(req, "Call-ID", "2cee372fc4be4e45");
+	addheader(req, "CSeq", "16022 REGISTER");
+	addheader(req, "User-Agent", useragent);
+	addheader(req, "Allow", "INVITE,ACK,BYE,CANCEL,OPTIONS,NOTIFY,SUBSCRIBE,INFO,MESSAGE,UPDATE,REFER");
+	snprint(buf, sizeof buf, "%lud", req->len);
+	addheader(req, "Content-Length", buf);
+
+	Bprint(bout, "%S", req);
+	Bflush(bout);
+
+	if(debug)
+		fprint(2, "sent:\n%S\n", req);
+
+	delsipmsg(res);
+	delsipmsg(req);
+
+	/* get the OK */
+	res = newsipmsg();
+	while((line = Brdline(bin, '\n')) != nil){
+		if(strncmp(line, "\r\n", 2) == 0)
+			break;
+
+		p = strchr(line, '\r');
+		*p++ = 0, *p = 0;
+
+		if(strstr(line, ":") == nil && req->code == 0){
+			if(gettokens(line, kv, 3, " ") == 3){
+				res->version = strdup(kv[0]);
+				res->code = strtoul(kv[1], nil, 10);
+				res->reason = strdup(kv[2]);
+			}
+			continue;
+		}
+
+		if(gettokens(line, kv, 2, ": ") == 2)
+			addheader(res, kv[0], kv[1]);
+	}
+
+	if(debug)
+		fprint(2, "rcvd:\n%S\n", res);
+
+	Bterm(bin);
+	Bterm(bout);
+
+	return 0;
+}
+
+int
+Sfmt(Fmt *f)
+{
+	Sipmsg *m;
+	Hdr *h;
+	int i, n;
+
+	m = va_arg(f->args, Sipmsg*);
+	n = 0;
+
+	if(m->code == 0){ /* request */
+		n += fmtprint(f, "%s %s %s\r\n",
+			getmethodstr(m->method), m->uri, m->version);
+	}else{ /* response */
+		n += fmtprint(f, "%s %d %s\r\n",
+			m->version, m->code, m->reason);
+	}
+
+	for(i = 0; i < nelem(m->headers); i++)
+		for(h = m->headers[i]; h != nil; h = h->next)
+			n += fmtprint(f, "%s: %s\r\n", h->name, h->value);
+	n += fmtprint(f, "\r\n");
+
+	if(m->len > 0){
+		fmtprint(f, "%.*s", (int)m->len, m->body);
+		n += m->len;
+	}
+
+	return n;
+}
+
+void
+SIPfmtinstall(void)
+{
+	fmtinstall('S', Sfmt);
 }
 
 void
@@ -133,53 +385,26 @@ delheaders(Hdrtab *ht)
 		}
 }
 
-/* rfc3261 § 10 - Registrations */
-static int
-sip_register(Sip *s, char *user, char *pass)
+Sipmsg *
+newsipmsg(void)
 {
-	Biobuf *bin, *bout;
-	char *line, *p, *kv[2];
-	int n;
+	Sipmsg *m;
 
-	if((bin = Bfdopen(s->fd, OREAD)) == nil)
-		sysfatal("Bfdopen: %r");
-	if((bout = Bfdopen(s->fd, OWRITE)) == nil)
-		sysfatal("Bfdopen: %r");
+	m = emalloc(sizeof(Sipmsg));
+	memset(m, 0, sizeof *m);
 
-	/* present yourself */
-	Bprint(bout, registerhdr0, s->nci->rsys, sipversion,
-		sipversion, s->nci->lsys, s->nci->lserv,
-		user, s->nci->lsys, s->nci->lserv,
-		user, s->nci->rsys,
-		user, s->nci->rsys);
-	Bflush(bout);
+	return m;
+}
 
-	/* wait for the challenge */
-	while((line = Brdline(bin, '\n')) != nil){
-		if(strncmp(line, "\r\n", 2) == 0)
-			break;
-
-		p = strchr(line, '\r');
-		*p++ = 0, *p = 0;
-		if(debug)
-			fprint(2, "%s\n", line);
-
-		if(strstr(line, ":") == nil)
-			continue;
-
-		gettokens(line, kv, nelem(kv), ": ");
-		if(debug)
-			fprint(2, "got key=%s value=%s\n", kv[0], kv[1]);
-	}
-
-	/* respond to the challenge */
-
-	/* get the OK */
-
-	Bterm(bin);
-	Bterm(bout);
-
-	return 0;
+void
+delsipmsg(Sipmsg *m)
+{
+	if(m->uri != nil)
+		free(m->uri);
+	if(m->reason != nil)
+		free(m->reason);
+	delheaders(m);
+	free(m);
 }
 
 Sip *
