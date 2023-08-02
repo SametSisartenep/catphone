@@ -7,6 +7,27 @@
 
 int debug;
 
+//Channel *ingress;
+//Channel *egress;
+//
+//
+//void
+//threadnetrecv(void *arg)
+//{
+//	
+//}
+//
+//void
+//threadnetppu(void *)
+//{
+//	
+//}
+//
+//void
+//threadnetsend(void *arg)
+//{
+//	
+//}
 
 void
 usage(void)
@@ -40,9 +61,15 @@ threadmain(int argc, char *argv[])
 	fd = dial(addr, nil, nil, nil);
 	if(fd < 0)
 		sysfatal("couldn't establish the connection");
-
-	if(debug)
+	else if(debug)
 		fprint(2, "connection established\n");
+
+//	ingress = chancreate(sizeof(Sipmsg*), 8);
+//	egress = chancreate(sizeof(Sipmsg*), 8);
+//	threadcreate(threadnetrecv, &fd, mainstacksize);
+//	threadcreate(threadnetppu, nil, mainstacksize);
+//	threadcreate(threadnetsend, &fd, mainstacksize);
+//	yield();
 
 	sip = mksip(fd);
 	if(sip == nil)

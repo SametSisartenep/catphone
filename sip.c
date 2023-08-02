@@ -318,19 +318,19 @@ getheader(Hdrtab *ht, char *name)
 void
 delheader(Hdrtab *ht, char *name)
 {
-	Hdr **h, *nh;
+	Hdr *h, *nh;
 	uint key;
 
 	key = hash(name);
-	h = &ht->headers[key];
-	while(*h != nil){
-		nh = (*h)->next;
-		if(cistrcmp((*h)->name, name) == 0){
-			free((*h)->name);
-			free((*h)->value);
-			free(*h);
+	h = ht->headers[key];
+	while(h != nil){
+		nh = h->next;
+		if(cistrcmp(h->name, name) == 0){
+			free(h->name);
+			free(h->value);
+			free(h);
 		}
-		*h = nh;
+		h = nh;
 	}
 }
 
